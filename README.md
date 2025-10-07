@@ -49,7 +49,7 @@ This lightweight but powerful python script runs entirely on your Mac, no networ
 
 - Clone, create a virtual environment.
 ```bash
-git clone https://github.com/YOURORG/macos-audit-suite.git
+git clone https://github.com/hackerman-jpeg/macos-audit-suite.git
 cd macos-audit-suite
 python3 -m venv .venv
 source .venv/bin/activate
