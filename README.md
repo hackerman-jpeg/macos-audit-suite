@@ -47,7 +47,7 @@ This lightweight but powerful python script runs entirely on your Mac, no networ
 
 ### Quick start
 
-- Download the Llama Model
+#### Download the Llama Model
 Legally, we can't build Metas Llama model in our code. So I wrote a script to make it easy. Or just get it at [HuggingFace](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct). But to use the script:
 ```
 curl -fsSL https://raw.githubusercontent.com/hackerman-jpeg/macos-audit-suite/main/install_llama_local.sh -o install_llama_local.sh
@@ -74,26 +74,24 @@ Then you can run:
 or
 `./run_stig.sh`
 
-
-
-- NEXT...Clone, create a virtual environment.
+#### NEXT...Clone, create a virtual environment.
 ```bash
 git clone https://github.com/hackerman-jpeg/macos-audit-suite.git
 cd macos-audit-suite
 python3 -m venv .venv
 source .venv/bin/activate
 ```
-- Prepare the model once.
+#### Prepare the model once.
 
 ``ollama list | grep -q llama3.1 || ollama pull llama3.1``
 
-- To run the normal audit.
+#### To run the normal audit.
 ```bash
 export OLLAMA_MODEL=llama3.1
 export OLLAMA_NUM_CTX=8192
 sudo python3 ai_audit_agent.py --stream
 ```
-- To just run the STIG runner. Place your XCCDF XML in the same folder
+#### To just run the STIG runner. Place your XCCDF XML in the same folder
 ```bash
 sudo python3 stig_runner.py --stream
 ```
