@@ -47,7 +47,36 @@ This lightweight but powerful python script runs entirely on your Mac, no networ
 
 ### Quick start
 
-- Clone, create a virtual environment.
+- Download the Llama Model
+Legally, we can't build Metas Llama model in our code. So I wrote a script to make it easy. Or just get it at [HuggingFace](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct). But to use the script:
+```
+curl -fsSL https://raw.githubusercontent.com/hackerman-jpeg/macos-audit-suite/main/install_llama_local.sh -o install_llama_local.sh
+chmod +x install_llama_local.sh
+./install_llama_local.sh
+```
+
+- What this does
+  - Detects macOS and CPU
+  - Installs Homebrew if missing
+  - Installs and starts Ollama (the local LLM runtime)
+  - Downloads the Llama 3.1 (8B Instruct) model
+  - Verifies the model locally
+  - Creates helper scripts in your folder:
+    - `test_llm.sh` – Quick test to check the AI
+    - `run_audit.sh` – Runs the AI audit agent
+    - `run_stig.sh` – Runs the STIG checks
+
+After it finishes
+`./test_llm.sh`
+should respond with a short “READY” message.
+Then you can run:
+`./run_audit.sh`
+or
+`./run_stig.sh`
+
+
+
+- NEXT...Clone, create a virtual environment.
 ```bash
 git clone https://github.com/hackerman-jpeg/macos-audit-suite.git
 cd macos-audit-suite
