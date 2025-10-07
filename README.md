@@ -1,63 +1,180 @@
-# MacOS Log Audit Tool
+[![macOS 12 plus](https://img.shields.io/badge/macOS-12%2B-0b72ff?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
+[![Python 3.10 plus](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
+[![Offline LLM](https://img.shields.io/badge/Offline%20LLM-Local%20Only-1fd186?style=for-the-badge&logo=protocols-dot-io&logoColor=white)](#ai-behavior)
+[![No Telemetry](https://img.shields.io/badge/No%20Telemetry-True-00c853?style=for-the-badge)](#security-posture)
+[![STIG XCCDF](https://img.shields.io/badge/STIG-XCCDF-6c63ff?style=for-the-badge)](#stig-runner)
+[![NIST and CMMC](https://img.shields.io/badge/NIST%20800%2053%20%7C%20800%20171%20%7C%20CMMC-Support-ffb300?style=for-the-badge)](#compliance-posture)
+[![HTML Reports](https://img.shields.io/badge/Reports-HTML%20plus%20TXT-00acc1?style=for-the-badge&logo=google-chrome&logoColor=white)](#outputs)
+[![Safe by default](https://img.shields.io/badge/STIG%20Checks-Safe%20by%20Default-29b6f6?style=for-the-badge)](#security-posture)
+[![Llama 3.1](https://img.shields.io/badge/AI-Llama%203.1%208B-8e8dff?style=for-the-badge&logo=meta&logoColor=white)](#ai-behavior)
+[![Ollama](https://img.shields.io/badge/Ollama-Optional-4caf50?style=for-the-badge&logo=gnometerminal&logoColor=white)](#requirements)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Optimized-bd10e0?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
 
-This log analysis script scans your macOS logs for specific patterns, which may indicate suspicious activity. It searches through the logs in the specified time range, identifies log entries matching the patterns, and writes the results to a file for further review.
+# MacAudit²
+## An on-prem macOS AI audit suite designed for those who need to NIST audit...but offline
 
-## Features
+This lightweight but powerful python script runs entirely on your Mac, no network calls, with an on device LLM for context. The result is a single click HTML report that looks professional and is easy to review.
 
-- Detects various suspicious patterns in macOS logs.
-- Multithreaded processing for faster log analysis.
-- Configurable number of threads for optimal performance.
-- Output file with timestamp for easy identification and review.
+### What you get
+* `ai_audit_agent.py` scans logs and key settings over a time window, then adds inline AI verdicts
+* `stig_runner.py` parses a DISA XCCDF macOS STIG and executes checks in a safe way by default
+* `report_theme.py` a shared HTML theme, same look for both reports
+* Optional, your XCCDF file next to the scripts for the STIG run
 
-## Prerequisites
+---
+### Features
+- Identical HTML for both tools, single theme and dashboard at the top
+- Inline AI analysis near each finding, not a detached summary
+- Plain text report and rich HTML, both timestamped to the minute
+- Safe by default for STIG checks, with a single switch to allow commands that modify state
+- Evidence preserved verbatim for every rule or category
 
-To use this script, you need:
+---
 
-- macOS system with logs to analyze.
-- Bash shell (default shell in macOS).
-`jq` installed.
-`parralel` installed.
+### Requirements
+- macOS 12 or newer
+- Python 3.10 or newer
+- Built in tools available on a standard Mac environment, for example log, awk, xmllint, csrutil, spctl
+- Ollama for the on device LLM  
+  ```bash
+  brew install ollama
+  brew services start ollama
+  ollama pull llama3.1
+  ```
+**NOTE**: Model weights are not bundled. You pull them locally once with the line above.
 
-## Usage
+---
 
-Download the log analysis script and save it as log_analysis.sh:
+### Quick start
 
-
-# Download the script from the GitHub repository
-` git clone https://github.com/hackerman-jpeg/MacOS_log_audit.git`
-
-# Make the script executable
-chmod +x log_analysis.sh
-
-Run the script:
-`./log_analysis.sh`
-
-Follow the prompts to select the time range and the number of threads to use for log analysis.
-The script will then process the logs and save the results in a file named audit_YYYY-MM-DD.txt.
-Open the output file to review the results:
-
-`open audit_YYYY-MM-DD.txt`
-Replace YYYY-MM-DD with the current date.
-
-## Customization
-
-You can customize the script by modifying the patterns array to include additional log patterns to search for. For example:
-
+- Clone, create a virtual environment.
 ```bash
-patterns=(
-  "failed to authenticate user"
-  "new custom pattern"
-)
+git clone https://github.com/YOURORG/macos-audit-suite.git
+cd macos-audit-suite
+python3 -m venv .venv
+source .venv/bin/activate
+```
+- Prepare the model once.
+
+``ollama list | grep -q llama3.1 || ollama pull llama3.1``
+
+- To run the normal audit.
+```bash
+export OLLAMA_MODEL=llama3.1
+export OLLAMA_NUM_CTX=8192
+sudo python3 ai_audit_agent.py --stream
+```
+- To just run the STIG runner. Place your XCCDF XML in the same folder
+```bash
+sudo python3 stig_runner.py --stream
 ```
 
-## Contributing
+---
 
-I welcome contributions to improve this script. If you have ideas or suggestions, please submit an issue or a pull request on the GitHub repository.
+### Menu, `audit_agent`
+1. Quick last hour
+2. Last 24 hours
+3. Last 48 hours
+4. Last 7 days
+5. Custom range
+6. Run STIGs if the runner script is present
 
-## License
+---
 
-This script is open-source software, for more information, please see the LICENSE file.
+### Running `STIG_runner`
+- Select an XCCDF file
+- Run all rules, or choose rules by id list, or filter by keyword in a future menu extension
+- Safe mode is the default. To allow non safe commands:
+```bash
+sudo python3 stig_runner.py --allow-unsafe
+```
+- Per command timeout, default eight seconds:
+```bash
+sudo python3 stig_runner.py --timeout 20
+```
 
-## Disclaimer
+---
 
-This script is provided "as is" without any warranties or guarantees. Use it at your own risk. The author is not responsible for any damages or negative consequences arising from the use of this script.
+### Outputs
+Text report with minute stamp, example
+``audit_YYYY-MM-DD_HHMM.txt``
+``stig_YYYY-MM-DD_HHMM.txt``
+HTML report with the same theme and dashboard for both tools, example
+``audit_YYYY-MM-DD_HHMM.html``
+``stig_YYYY-MM-DD_HHMM.html``
+The tool opens the HTML in your default browser
+
+---
+
+### Dashboard at the top
+`Fail`, `Pass`, `Error`, Manual counts, severity counts, and an AI risk index on a zero to one hundred scale
+
+---
+
+### Inside each section
+- Commands that were executed, shown exactly as run
+- Exit code and raw evidence, standard output and standard error
+- AI verdict next to the evidence with a short rationale and tags
+
+---
+
+### AI behavior
+- Local only through Ollama on http://127.0.0.1:11434
+- Model defaults to Meta Llama 3.1 eight B Instruct
+- Deterministic system prompts that ask for strict JSON
+- Verdict values
+  - Benign likely false positive
+  - Risk needs review
+  - Fail confirmed
+  - Inconclusive
+
+---
+
+### Switching models
+Set the variable and ensure the model is present in Ollama
+```bash
+export OLLAMA_MODEL=qwen2.5:7b-instruct
+export OLLAMA_NUM_CTX=8192
+```
+
+---
+
+### Compliance posture
+The audit agent and the STIG runner support evidence gathering for controls that map to NIST 800-53, NIST 800-171, and CMMC. The STIG runner executes the actual XCCDF checks you provide. For any control that is not testable via command line, the runner marks it manual and preserves the text for review. Use your program specific control mapping to produce the final control by control artifact.
+
+---
+
+### Security posture
+- No network calls by the Python scripts other than the local Ollama port
+- STIG runner defaults to safe commands that do not change state
+- Every command has a timeout to avoid hangs
+- Ctrl-C skips the current rule cleanly and continues
+
+---
+
+### Troubleshooting
+
+#### ⛔ Ollama port already in use.
+
+``lsof -iTCP:11434 -sTCP:LISTEN -n -P``
+
+Check the Ollama API.
+
+``curl -s http://127.0.0.1:11434/ | python3 -m json.tool``
+
+#### ⛔ Model not present.
+
+``ollama pull llama3.1``
+
+Stream everything to the console for live debugging.
+
+``sudo python3 ai_audit_agent.py --stream``
+``sudo python3 stig_runner.py --stream``
+
+---
+
+### Notes.
+- You can tune the context window with OLLAMA_NUM_CTX
+- You can disable auto open of the browser by adding ``--no-open``
+- You can run both tools without the stream flag if you want a minimal console
+
