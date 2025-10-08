@@ -15,10 +15,10 @@
 This lightweight python script runs fully locally on macOS, no network calls, with an on device LLM for context. It then spits out a  nice HTML report (customizable) and a .txt. The point of this was to create a NIST audit script and create something that others can **build upon and expand** (so please do). This isn't an end all be all...but rather a stepping stone for doing more. 
 
 ### What you get
-* `ai_audit_agent.py` scans logs and key settings over a time window, then adds inline AI verdicts
-* `stig_runner.py` parses a DISA XCCDF macOS STIG and executes checks in a safe way by default
-* `report_theme.py` a shared HTML theme, same look for both reports
-* Optional, your XCCDF file next to the scripts for the STIG run
+- `ai_audit_agent.py` scans logs and key settings over a time window, then adds inline AI verdicts
+- `stig_runner.py` parses a DISA XCCDF macOS STIG and executes checks in a safe way by default
+- `report_theme.py` a shared HTML theme, same look for both reports
+- **NOTE**, put any number of STIG files(XCCDF XML) file in the same folder as these scripts for the STIG run. It will parse the commands in the STIG and run them.
 
 ---
 ### Features
