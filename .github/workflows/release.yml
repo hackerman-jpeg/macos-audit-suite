@@ -1,0 +1,25 @@
+name: Build Release Bundle
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package scripts
+        run: |
+          mkdir release_bundle
+          cp ai_audit_agent.py stig_runner.py install_llama_local.sh README.md release_bundle/
+          zip -r macos_audit_suite.zip release_bundle
+      - name: Upload artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./macos_audit_suite.zip
+          asset_name: macos_audit_suite.zip
+          asset_content_type: application/zip
