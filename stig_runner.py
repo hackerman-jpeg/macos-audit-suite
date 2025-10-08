@@ -220,7 +220,7 @@ Return JSON only."""
     except Exception:
         return {"verdict":"inconclusive","risk_note":"AI unavailable or non-JSON","tags":["ai-fallback"]}
 
-# --- HTML builders
+# --- HTML builders # Should use the theme? 
 def status_class(verdict: str) -> str:
     return {"pass":"pass","fail":"fail","needs_review":"warn","inconclusive":"err"}.get(verdict,"err")
 
