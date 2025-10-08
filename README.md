@@ -1,11 +1,11 @@
 [![Build](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/python-lint-test.yml/badge.svg)](https://github.com/YOURORG/YOURREPO/actions/workflows/python-lint-test.yml)
 [![Auto Tag & Release](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/auto-release.yml/badge.svg)](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/auto-release.yml)
+![Version](https://img.shields.io/github/v/release/hackerman-jpeg/macos-audit-suite?color=0366d6&label=version)
 
 [![macOS 12 plus](https://img.shields.io/badge/macOS-12%2B-0b72ff?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
 [![Python 3.10 plus](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
 
 [![STIG XCCDF](https://img.shields.io/badge/STIG-XCCDF-6c63ff?style=for-the-badge)](#stig-runner)
-[![NIST and CMMC](https://img.shields.io/badge/NIST%20800%2053%20%7C%20800%20171%20%7C%20CMMC-Support-ffb300?style=for-the-badge)](#compliance-posture)
 [![Llama 3.1](https://img.shields.io/badge/AI-Llama%203.1%208B-8e8dff?style=for-the-badge&logo=meta&logoColor=white)](#ai-behavior)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Optimized-bd10e0?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
 
