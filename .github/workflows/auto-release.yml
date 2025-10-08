@@ -1,0 +1,61 @@
+name: Auto Tag & Release
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write    # needed to create tags and releases
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Generate a CalVer tag like v2025.10.08-<shortsha>
+      - name: Compute tag
+        id: vars
+        shell: bash
+        run: |
+          DATE_TAG="v$(date -u +'%Y.%m.%d')-${GITHUB_SHA::7}"
+          echo "tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Lint / syntax smoke test
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 || true
+          flake8 --max-line-length=120 || true
+          python -m py_compile ai_audit_agent.py stig_runner.py || true
+
+      - name: Package release bundle
+        run: |
+          mkdir -p release_bundle
+          cp ai_audit_agent.py stig_runner.py install_llama_local.sh README.md release_bundle/
+          # add any other files you want in the bundle
+          (cd release_bundle && zip -r ../macos_audit_suite_${{ steps.vars.outputs.tag }}.zip .)
+
+      # Create GitHub release (also creates the tag if it doesn't exist)
+      - name: Publish GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.vars.outputs.tag }}
+          name: "macOS Audit Suite ${{ steps.vars.outputs.tag }}"
+          body: |
+            Automated release for `${{ github.sha }}` on `${{ github.ref_name }}`.
+            Includes:
+            - ai_audit_agent.py
+            - stig_runner.py
+            - install_llama_local.sh
+            - README.md
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: macos_audit_suite_${{ steps.vars.outputs.tag }}.zip
+          artifactContentType: application/zip
