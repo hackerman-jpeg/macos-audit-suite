@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 ## AI is skipped if not present. Remember this won't run with AI unless you install the right model and have it up and running. Use the provided script to do it easily. 
+
 import os, sys, re, json, subprocess, datetime, webbrowser
 from collections import Counter
 import report_theme as theme
