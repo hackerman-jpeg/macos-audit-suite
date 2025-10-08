@@ -12,7 +12,7 @@
 # MacAudit²
 ## An on-prem macOS AI audit suite designed for those who need to NIST audit...but offline
 
-This lightweight but powerful python script runs entirely on your Mac, no network calls, with an on device LLM for context. The result is a single click HTML report that looks professional and is easy to review.
+This lightweight python script runs fully locally on macOS, no network calls, with an on device LLM for context. It then spits out a  nice HTML report (customizable) and a .txt. The point of this was to create a NIST audit script and create something that others can **build upon and expand** (so please do). This isn't an end all be all...but rather a stepping stone for doing more. 
 
 ### What you get
 * `ai_audit_agent.py` scans logs and key settings over a time window, then adds inline AI verdicts
