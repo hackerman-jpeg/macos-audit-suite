@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# stig_runner.py
+
 # Execute macOS STIG checks from DISA XCCDF, preserve evidence, and render a clean HTML report.
 # Robust multi-line extraction (heredocs, backslash continuations, fenced blocks),
 # safe-by-default execution, per-command timeouts, and optional local LLM analysis via Ollama.
