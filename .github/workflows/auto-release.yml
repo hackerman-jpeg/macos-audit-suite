@@ -7,9 +7,13 @@ on:
       - "README.md"
       - "README.MD"
       - "readme.md"
+      - "docs/**"
+
+  # Manual button in the Actions tab
+  workflow_dispatch:
 
 permissions:
-  contents: write    # needed to create tags and releases
+  contents: write   # required to create tags/releases and upload assets
 
 jobs:
   build-and-release:
@@ -17,16 +21,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed so git archive has full tree and tags can be created
 
-      # Generate a CalVer tag like v2025.10.08-<shortsha>
-      - name: Compute tag
+      - name: Compute tag & names (CalVer + short SHA)
         id: vars
         shell: bash
         run: |
           DATE_TAG="v$(date -u +'%Y.%m.%d')-${GITHUB_SHA::7}"
           echo "tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+          echo "rel_name=macOS Audit Suite $DATE_TAG" >> "$GITHUB_OUTPUT"
+          echo "bundle_name=macos_audit_suite_${DATE_TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Python
+      - name: Set up Python (lint smoke test only)
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -38,28 +45,53 @@ jobs:
           flake8 --max-line-length=120 || true
           python -m py_compile ai_audit_agent.py stig_runner.py || true
 
-      - name: Package release bundle
+      # Build artifacts:
+      #  1) Source snapshot exactly as in repo at this commit (auto-includes new files)
+      #  2) Runtime bundle (everything except CI files / .git and optionally huge models)
+      - name: Package release bundles
+        shell: bash
         run: |
-          mkdir -p release_bundle
-          cp ai_audit_agent.py stig_runner.py install_llama_local.sh README.md release_bundle/
-          # add any other files you want in the bundle
-          (cd release_bundle && zip -r ../macos_audit_suite_${{ steps.vars.outputs.tag }}.zip .)
+          set -euo pipefail
+          mkdir -p dist
 
-      # Create GitHub release (also creates the tag if it doesn't exist)
+          # 1) Source archive (authoritative snapshot)
+          git archive --format=zip --worktree-attributes -o "dist/${{ steps.vars.outputs.bundle_name }}_src.zip" HEAD .
+
+          # 2) Runtime bundle (rsync lets us exclude)
+          mkdir -p bundle
+          rsync -a \
+            --exclude ".git" \
+            --exclude ".github" \
+            --exclude "dist" \
+            --exclude ".venv" \
+            --exclude "__pycache__" \
+            --exclude "*.gguf" \
+            ./ bundle/
+
+          # make shell helpers executable if present
+          chmod +x bundle/*.sh 2>/dev/null || true
+          (cd bundle && zip -r "../dist/${{ steps.vars.outputs.bundle_name }}.zip" .)
+
+          # Optional: attach any STIG XMLs separately for convenience
+          if ls *.xml *.xccdf.xml >/dev/null 2>&1; then
+            mkdir -p dist/stigs && cp *.xml *.xccdf.xml dist/stigs/ 2>/dev/null || true
+            (cd dist/stigs && zip -r "../${{ steps.vars.outputs.bundle_name }}_stigs.zip" .)
+          fi
+
+      # Create or update the release for this computed tag
+      # softprops/action-gh-release handles "update if exists" and uploads files
       - name: Publish GitHub Release
-        uses: ncipollo/release-action@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag: ${{ steps.vars.outputs.tag }}
-          name: "macOS Audit Suite ${{ steps.vars.outputs.tag }}"
-          body: |
-            Automated release for `${{ github.sha }}` on `${{ github.ref_name }}`.
-            Includes:
-            - ai_audit_agent.py
-            - stig_runner.py
-            - install_llama_local.sh
-            - README.md
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ${{ steps.vars.outputs.rel_name }}
+          make_latest: true
           draft: false
           prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: macos_audit_suite_${{ steps.vars.outputs.tag }}.zip
-          artifactContentType: application/zip
+          generate_release_notes: true
+          files: |
+            dist/${{ steps.vars.outputs.bundle_name }}.zip
+            dist/${{ steps.vars.outputs.bundle_name }}_src.zip
+            dist/${{ steps.vars.outputs.bundle_name }}_stigs.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
