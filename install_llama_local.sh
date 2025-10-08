@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # install_llama_local.sh
 # Sets up a local LLM (Llama 3.1 via Ollama) on macOS, starts the service, pulls the model,
-# and verifies everything end to end. Safe to rerun.
+# and verifies everything end to end. Safe to rerun. 
+# NOTE: This isn't required for the audit to run...just makes it interesting.
 
 set -euo pipefail
 
