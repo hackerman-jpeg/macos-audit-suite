@@ -3,6 +3,12 @@ name: Auto Tag & Release
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "README.md"
+      - "README.MD"
+      - "readme.md"
+      - "docs/**"
+      - ".github/**"
 
 permissions:
   contents: write    # needed to create tags and releases
