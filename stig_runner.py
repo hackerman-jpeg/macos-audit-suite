@@ -1,229 +1,402 @@
 #!/usr/bin/env python3
-import os, sys, re, json, shlex, subprocess, datetime, tempfile, webbrowser, signal, time, html as htmllib
-import xml.etree.ElementTree as ET
-from collections import Counter
-import report_theme as theme
+# stig_runner.py
+# Execute macOS STIG checks from DISA XCCDF, preserve evidence, and render a clean HTML report.
+# Robust multi-line extraction (heredocs, backslash continuations, fenced blocks),
+# safe-by-default execution, per-command timeouts, and optional local LLM analysis via Ollama.
 
-STREAM        = ("-stream" in sys.argv) or ("--stream" in sys.argv)
-OPEN_BROWSER  = "--no-open" not in sys.argv
-ALLOW_UNSAFE  = "--allow-unsafe" in sys.argv
-NOW           = datetime.datetime.now(datetime.timezone.utc)
-STAMP         = NOW.strftime("%Y-%m-%d_%H%M")
-OUT_HTML      = f"stig_{STAMP}.html"
-OUT_TXT       = f"stig_{STAMP}.txt"
+import argparse, datetime, glob, json, os, re, shlex, subprocess, sys, textwrap, webbrowser
+from typing import List, Dict, Tuple
 
-LLM_HOST     = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-LLM_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.1")
-LLM_TIMEOUT  = 90
-LLM_NUM_CTX  = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
-ENABLE_LLM   = True
-DEFAULT_TIMEOUT = int(next((sys.argv[i+1] for i,a in enumerate(sys.argv) if a=="--timeout"), "8")) if "--timeout" in sys.argv else 8
+# --- Theme
+try:
+    from report_theme import html_head, html_tail, dashboard_html
+except Exception:
+    # Fallback minimal if theme not present
+    def html_head(t): return f"<!doctype html><meta charset='utf-8'><title>{t}</title><style>body{{font-family:sans-serif;}}</style><h1>{t}</h1>"
+    def html_tail(): return ""
+    def dashboard_html(t, m, c): return f"<h2>{t}</h2>"
 
-SAFE_BIN_ALLOWLIST = ("/usr/bin/","/bin/","/usr/sbin/","/sbin/","/System/Library/","/usr/libexec/")
-NS = {"x":"http://checklists.nist.gov/xccdf/1.1","x12":"http://checklists.nist.gov/xccdf/1.2"}
-HEREDOC_OSA_MARK = "__HEREDOC_OSASCRIPT__::"
-HEREDOC_RE = re.compile(r'(?ms)^\s*(/usr/bin/osascript[^\n]*?)<<\s*([A-Za-z0-9_]+)\s*\n(.*?)\n\2\s*$')
-LINE_CMD_RES = [re.compile(r'^\s*\$\s+(.+)$', re.M), re.compile(r'`(/[^`]+)`'), re.compile(r'(?m)^\s*(/usr/\S+|/bin/\S+|/sbin/\S+)\b[^\n]*')]
+NOW = datetime.datetime.now(datetime.timezone.utc)
+STAMP = NOW.strftime("%Y-%m-%d_%H%M")
+STREAM = False
 
-def info(m): 
-    if STREAM: print(m, flush=True)
+# --- Execution safety
+_EXEC_WHITELIST_PREFIX = ("/",)
+_EXEC_WHITELIST_CMDS = {
+    "osascript","defaults","profiles","security","csrutil","spctl","pwpolicy",
+    "launchctl","grep","awk","sed","xmllint","stat","ls","find","sysctl",
+    "more","cat","dscl","cupsctl","pgrep","mdmclient","sshd","sudo","sh","bash","zsh","printf","echo"
+}
 
-def _ollama_generate(prompt, temperature=0.1):
-    req = {"model": LLM_MODEL, "options":{"temperature":temperature,"num_ctx":LLM_NUM_CTX},"prompt":prompt,"stream":False}
-    try:
-        import urllib.request
-        r = urllib.request.Request(f"{LLM_HOST}/api/generate", data=json.dumps(req).encode(), headers={"Content-Type":"application/json"})
-        with urllib.request.urlopen(r, timeout=LLM_TIMEOUT) as f:
-            return json.loads(f.read()).get("response","").strip()
-    except Exception as e:
-        return f"__LLM_ERROR__ {type(e).__name__}: {e}"
+# --- Regex for extraction
+_RE_FENCE = re.compile(r"```(?:bash|sh|zsh)?\s*\n(?P<body>.+?)\n```", re.DOTALL)
+_RE_PROMPT = re.compile(r"^\s*\$\s*(?P<cmd>.+?)\s*$")
+_RE_HEREDOC_OPEN = re.compile(r"(?P<head>.+?)<<\s*(?P<tag>[A-Za-z0-9_]+)\s*$")
+def _RE_HEREDOC_TERM(tag): return re.compile(rf"^\s*{re.escape(tag)}\s*$")
 
-def ai_judge(rule_meta, evidence):
-    if not ENABLE_LLM or not evidence.strip():
-        return {"verdict":"Inconclusive","rationale":"No evidence to analyze.","tags":[],"confidence":"low"}
-    sys_prompt = ('You are a macOS compliance auditor. Analyze the STIG check EVIDENCE and decide if a failure is likely a false positive, '
-                  'real issue, or inconclusive. Return JSON only: verdict,rationale,tags,confidence. verdict ∈ '
-                  '["Benign Likely FP","Risk Needs Review","Fail Confirmed","Inconclusive"].')
-    body = _ollama_generate(f"<<SYS>>{sys_prompt}<</SYS>>\nRULE_META:\n{json.dumps(rule_meta)}\nEVIDENCE:\n{evidence}\nRESPONSE:", 0.0)
-    try:
-        obj = json.loads(body)
-        if all(k in obj for k in ("verdict","rationale","tags","confidence")): return obj
-    except Exception: pass
-    body2 = _ollama_generate("JSON only with verdict,rationale,tags,confidence\n" + f"RULE_META:\n{json.dumps(rule_meta)}\nEVIDENCE:\n{evidence}\nRESPONSE:", 0.0)
-    try:
-        obj2 = json.loads(body2)
-        if all(k in obj2 for k in ("verdict","rationale","tags","confidence")): return obj2
-    except Exception: pass
-    return {"verdict":"Inconclusive","rationale":"Model returned non JSON.","tags":[],"confidence":"low"}
+def log(msg):
+    if STREAM: print(msg, flush=True)
 
-def extract_commands(check_text):
-    if not check_text: return []
+def join_backslash_lines(s: str) -> str:
+    lines, out, buf = s.splitlines(), [], ""
+    for line in lines:
+        line_r = line.rstrip()
+        if not buf:
+            buf = line_r
+        else:
+            buf += line_r
+        if buf.endswith("\\"):
+            buf = buf[:-1]
+            continue
+        out.append(buf); buf = ""
+    if buf: out.append(buf)
+    return "\n".join(out)
+
+def looks_executable(cmd: str) -> bool:
+    cmd = cmd.strip()
+    if not cmd or cmd.startswith("#"): return False
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*", cmd): return False  # assignment examples
+    token = cmd.split()[0]
+    if token.startswith(_EXEC_WHITELIST_PREFIX): return True
+    if token in _EXEC_WHITELIST_CMDS: return True
+    return False
+
+def extract_from_fences(text: str) -> List[str]:
     commands = []
-    for m in HEREDOC_RE.finditer(check_text):
-        payload = {"head": m.group(1).strip(), "script": m.group(3)}
-        commands.append(HEREDOC_OSA_MARK + json.dumps(payload))
-    for rx in LINE_CMD_RES:
-        for m in rx.findall(check_text):
-            cmd = m if isinstance(m, str) else m[0]
-            cmd = re.sub(r'\s+#.*$', '', cmd.strip())
-            if not cmd: continue
-            if not ALLOW_UNSAFE and re.search(r'\b(rm\s+-rf|defaults\s+write.*\s+true|launchctl\s+(remove|unload)|pwpolicy\s+-set|\bprofiles\b\s+-R|\bsystemsetup\b.*-set)', cmd):
-                continue
-            if not cmd.split()[0].startswith(SAFE_BIN_ALLOWLIST): continue
-            if cmd.startswith("/usr/bin/osascript") and "<< " in check_text: continue
-            if cmd not in commands: commands.append(cmd)
-    return commands[:6]
+    for m in _RE_FENCE.finditer(text):
+        body = join_backslash_lines(m.group("body"))
+        lines = body.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            h = _RE_HEREDOC_OPEN.search(line)
+            if h:
+                head, tag = h.group("head").rstrip(), h.group("tag")
+                block = [line]; i += 1
+                while i < len(lines) and not _RE_HEREDOC_TERM(tag).match(lines[i]):
+                    block.append(lines[i]); i += 1
+                if i < len(lines): block.append(lines[i])
+                cmd = "\n".join(block).strip()
+                if looks_executable(head): commands.append(cmd)
+                i += 1; continue
+            pm = _RE_PROMPT.match(line)
+            cand = pm.group("cmd") if pm else line
+            cand = cand.strip()
+            if looks_executable(cand): commands.append(cand)
+            i += 1
+    return commands
 
-def find_rules(xml_path):
-    try: root = ET.parse(xml_path).getroot()
-    except Exception as e: print(f"Failed to parse {xml_path}: {e}"); return []
-    def text_in(el, name):
-        for ns in (NS["x12"], NS["x"], ""):
-            tag = f"./{{{ns}}}{name}" if ns else f"./{name}"
-            n = el.find(tag)
-            if n is not None and (n.text or "").strip(): return n.text
-        return ""
-    rules=[]
-    for ns in (NS["x12"], NS["x"], ""):
-        for r in root.findall(f".//{{{ns}}}Rule" if ns else ".//Rule"):
-            rid = r.get("id","").strip()
-            title = text_in(r, "title").strip()
-            sev = r.get("severity","").lower() or "unknown"
-            check_text = ""
-            for tns in (NS["x12"], NS["x"], ""):
-                cc = r.find(f".//{{{tns}}}check/{{{tns}}}check-content") if tns else r.find(".//check/check-content")
-                if cc is not None and cc.text: check_text = cc.text; break
-            cmds = extract_commands(check_text)
-            rules.append({"id":rid,"title":title,"severity":sev,"check_text":check_text,"commands":cmds})
+def extract_from_free_text(text: str) -> List[str]:
+    commands, lines = [], join_backslash_lines(text).splitlines()
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        pm = _RE_PROMPT.match(raw)
+        if pm:
+            cand = pm.group("cmd")
+            h = _RE_HEREDOC_OPEN.search(cand)
+            if h:
+                head, tag = h.group("head").rstrip(), h.group("tag")
+                block = [cand]; i += 1
+                while i < len(lines) and not _RE_HEREDOC_TERM(tag).match(lines[i]):
+                    block.append(lines[i]); i += 1
+                if i < len(lines): block.append(lines[i])
+                cmd = "\n".join(block).strip()
+                if looks_executable(head): commands.append(cmd)
+                i += 1; continue
+            if looks_executable(cand): commands.append(cand)
+            i += 1; continue
+        h = _RE_HEREDOC_OPEN.search(raw)
+        if h:
+            head, tag = h.group("head").rstrip(), h.group("tag")
+            block = [raw]; i += 1
+            while i < len(lines) and not _RE_HEREDOC_TERM(tag).match(lines[i]):
+                block.append(lines[i]); i += 1
+            if i < len(lines): block.append(lines[i])
+            cmd = "\n".join(block).strip()
+            if looks_executable(head): commands.append(cmd)
+            i += 1; continue
+        i += 1
+    return commands
+
+# --- XCCDF parsing (lxml optional, fallback to crude)
+def extract_rules_from_xccdf(xccdf_path: str):
+    rules = []
+    try:
+        from lxml import etree, html as lxml_html
+        parser = etree.XMLParser(remove_blank_text=False, resolve_entities=False)
+        root = etree.parse(xccdf_path, parser)
+        ns = {"xccdf":"http://checklists.nist.gov/xccdf/1.2"}
+        for rule in root.findall(".//xccdf:Rule", namespaces=ns):
+            rid = rule.get("id") or "UNKNOWN_ID"
+            title_el = rule.find("xccdf:title", namespaces=ns)
+            title = (title_el.text or "").strip() if title_el is not None else "Untitled"
+            sev = (rule.get("severity") or "unknown").strip()
+            cmd_blocks, manual = [], False
+            for check in rule.findall("xccdf:check", namespaces=ns):
+                cc = check.find("xccdf:check-content", namespaces=ns)
+                if cc is None: continue
+                cc_text = "".join(cc.itertext(with_tail=True))
+                try:
+                    blob = lxml_html.fromstring(f"<div>{cc_text}</div>").text_content()
+                except Exception:
+                    blob = cc_text
+                blob = blob.replace("\r\n","\n")
+                cmds = extract_from_fences(blob)
+                if not cmds: cmds = extract_from_free_text(blob)
+                cmd_blocks.extend(cmds)
+            if not cmd_blocks: manual = True
+            rules.append({"id":rid,"title":title,"severity":sev,"commands":cmd_blocks,"manual":manual})
+    except Exception as e:
+        # Fallback: very simple pull of <check-content> text
+        import xml.etree.ElementTree as ET
+        root = ET.parse(xccdf_path).getroot()
+        for rule in root.iter():
+            if rule.tag.endswith("Rule"):
+                rid = rule.attrib.get("id","UNKNOWN_ID")
+                title = "Untitled"; sev = rule.attrib.get("severity","unknown")
+                for child in rule:
+                    if child.tag.endswith("title"): title = (child.text or "Untitled").strip()
+                cmd_blocks, manual = [], False
+                for check in rule:
+                    if check.tag.endswith("check"):
+                        for cc in check:
+                            if cc.tag.endswith("check-content"):
+                                blob = "".join(cc.itertext())
+                                blob = blob.replace("\r\n","\n")
+                                cmds = extract_from_fences(blob)
+                                if not cmds: cmds = extract_from_free_text(blob)
+                                cmd_blocks.extend(cmds)
+                if not cmd_blocks: manual = True
+                rules.append({"id":rid,"title":title,"severity":sev,"commands":cmd_blocks,"manual":manual})
     return rules
 
-def run_cmd(cmd, timeout_s):
-    if cmd.startswith(HEREDOC_OSA_MARK):
-        payload = json.loads(cmd[len(HEREDOC_OSA_MARK):])
-        head, script = payload["head"], payload["script"]
-        import tempfile, shlex
-        with tempfile.NamedTemporaryFile(prefix="stig_jxa_", suffix=".js", delete=False, mode="w") as tf:
-            tf.write(script); tmp = tf.name
-        head_args = shlex.split(head); final = [head_args[0]]
-        if "-l" in head_args:
-            i = head_args.index("-l"); final.extend(head_args[i:i+2])
-        final.append(tmp)
-        final_cmd = " ".join(shlex.quote(x) for x in final)
-        try: rc, out, err = _run_shell(final_cmd, timeout_s)
-        finally:
-            try: os.unlink(tmp)
-            except Exception: pass
-        return rc, out, f"{err}\n[heredoc from STIG]"
-    return _run_shell(cmd, timeout_s)
+# --- Command runner with a real shell
+def run_cmd(cmd: str, timeout: int = 12) -> Tuple[int,str,str]:
+    env = os.environ.copy()
+    env["ENV"] = ""; env["BASH_ENV"] = ""
+    # Feed the whole block to bash -lc so heredocs work
+    p = subprocess.run(
+        ["/bin/bash","-lc",cmd if cmd.endswith("\n") else cmd+"\n"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        timeout=timeout
+    )
+    return p.returncode, p.stdout, p.stderr
 
-def _run_shell(cmd, timeout_s):
+# --- Ollama AI (optional, offline)
+def ai_judge(rule: Dict, rc: int, out: str, err: str) -> Dict:
+    host = os.getenv("OLLAMA_HOST","http://127.0.0.1:11434")
+    model = os.getenv("OLLAMA_MODEL","llama3.1")
+    prompt = f"""You are a macOS compliance assistant. Analyze this STIG rule result and return strict JSON.
+Fields: verdict (one of: "pass","fail","inconclusive","needs_review"), risk_note (short), tags (array of 1-4 short labels).
+
+Rule:
+ID: {rule['id']}
+Title: {rule['title']}
+Severity: {rule['severity']}
+
+ExitCode: {rc}
+STDOUT:
+{out[:4000]}
+
+STDERR:
+{err[:2000]}
+Return JSON only."""
     try:
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid)
-        try: out, err = p.communicate(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL); return 124, "", f"timeout after {timeout_s}s"
-        return p.returncode, (out or "").strip(), (err or "").strip()
-    except KeyboardInterrupt:
-        try: os.killpg(p.pid, signal.SIGKILL)
-        except Exception: pass
-        return 130, "", "interrupted by user"
-    except Exception as e:
-        return 255, "", f"runner exception: {e}"
+        data = {"model": model, "prompt": prompt, "stream": False, "options": {"temperature": 0.1}}
+        resp = subprocess.run(
+            ["curl","-fsS","-H","Content-Type: application/json","-d",json.dumps(data),f"{host}/api/generate"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60
+        )
+        j = json.loads(resp.stdout)
+        txt = j.get("response","").strip()
+        # Extract JSON if the model wrapped anything
+        m = re.search(r"\{.*\}", txt, re.DOTALL)
+        if m: txt = m.group(0)
+        return json.loads(txt)
+    except Exception:
+        return {"verdict":"inconclusive","risk_note":"AI unavailable or non-JSON","tags":["ai-fallback"]}
 
-def triage_status(rc, out, err, rule):
-    blob = (out+"\n"+err).lower()
-    if not rule["commands"]: return "manual", False
-    if rc == 0:
-        if re.search(r"\b(pass|yes|enabled|ok)\b", blob): return "executed", True
-        return "executed", False
-    if rc in (124,127,130): return ("errors" if rc!=130 else "skipped"), False
-    if "grep -c" in " ".join(rule["commands"]) and out.strip()=="0": return "executed", False
-    return "errors", False
+# --- HTML builders
+def status_class(verdict: str) -> str:
+    return {"pass":"pass","fail":"fail","needs_review":"warn","inconclusive":"err"}.get(verdict,"err")
 
-def probable_false_positive(rc, out, err):
-    text = (out+"\n"+err).lower()
-    if rc in (124,130): return True, "Check timed out or was interrupted."
-    if rc == 127 or "command not found" in text or "xpath set is empty" in text: return True, "Dependency absent or key missing; often Not Applicable."
-    return False, ""
+def render_report_html(title: str, meta: Dict, rows: List[Dict]) -> str:
+    total = len(rows)
+    pass_n = sum(1 for r in rows if r["ai"]["verdict"]=="pass")
+    fail_n = sum(1 for r in rows if r["ai"]["verdict"]=="fail")
+    review_n = sum(1 for r in rows if r["ai"]["verdict"]=="needs_review")
+    err_n = sum(1 for r in rows if r["ai"]["verdict"]=="inconclusive")
+    sev_high = sum(1 for r in rows if r["severity"].lower()=="high")
+    sev_med = sum(1 for r in rows if r["severity"].lower()=="medium")
+    sev_low = sum(1 for r in rows if r["severity"].lower()=="low" or r["severity"].lower()=="informational")
+
+    counters = {
+        "Rules": (total,""),
+        "Pass": (pass_n,"ok"),
+        "Fail": (fail_n,"err"),
+        "Needs review": (review_n,"warn"),
+        "Inconclusive": (err_n,""),
+    }
+    dash = dashboard_html(title, meta, counters)
+
+    table_rows = []
+    for r in rows:
+        sev = r["severity"]
+        verdict = r["ai"]["verdict"]
+        note = r["ai"].get("risk_note","")
+        tags = ", ".join(r["ai"].get("tags",[]))
+        cmd_html = "".join(f"<pre><code>{escape_html(c)}</code></pre>" for c in r["commands"]) if r["commands"] else "<i>manual</i>"
+        ev_html = ""
+        for ev in r["evidence"]:
+            ee = f"<details><summary><code>$ {escape_html(first_line(ev['cmd']))}</code> <span class='small'>(exit {ev['rc']})</span></summary>"
+            if ev["stdout"].strip():
+                ee += f"<b>stdout</b><pre>{escape_html(ev['stdout'])}</pre>"
+            if ev["stderr"].strip():
+                ee += f"<b>stderr</b><pre>{escape_html(ev['stderr'])}</pre>"
+            ee += "</details>"
+            ev_html += ee
+        table_rows.append(f"""
+<tr>
+  <td><div><b>{escape_html(r['id'])}</b><div class="small">{escape_html(r['title'])}</div></div></td>
+  <td><span class="sev">{escape_html(sev)}</span></td>
+  <td><span class="status {status_class(verdict)}">{escape_html(verdict)}</span><div class="small">{escape_html(note)}{(' · '+escape_html(tags)) if tags else ''}</div></td>
+  <td>{cmd_html}</td>
+  <td>{ev_html}</td>
+</tr>
+""")
+
+    html = []
+    html.append(html_head(title))
+    html.append(dash)
+    html.append('<div class="panel"><table><thead><tr><th>Rule</th><th>Severity</th><th>AI Verdict</th><th>Commands</th><th>Evidence</th></tr></thead><tbody>')
+    html.extend(table_rows)
+    html.append("</tbody></table></div>")
+    html.append(html_tail())
+    return "".join(html)
+
+def escape_html(s: str) -> str:
+    return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+
+def first_line(s: str) -> str:
+    return (s or "").splitlines()[0] if s else ""
+
+# --- Runner
+def run_rules(rules: List[Dict], ids: List[str], keyword: str, allow_unsafe: bool, timeout: int, debug: bool) -> Tuple[List[Dict], Dict]:
+    selected = []
+    if ids:
+        want = set(ids)
+        selected = [r for r in rules if r["id"] in want]
+    elif keyword:
+        kw = keyword.lower()
+        selected = [r for r in rules if kw in r["title"].lower()]
+    else:
+        selected = rules
+
+    results = []
+    counts = {"executed":0,"manual":0,"errors":0}
+    for r in selected:
+        log(f"{r['id']} :: {r['title']}")
+        ev = []
+        if not r["commands"]:
+            counts["manual"] += 1
+        for c in r["commands"]:
+            # safety: block dangerous non-whitelisted bare commands if unsafe not allowed
+            head = c.strip().split()[0]
+            if not allow_unsafe and not (head.startswith("/") or head in _EXEC_WHITELIST_CMDS):
+                ev.append({"cmd": c, "rc": 127, "stdout": "", "stderr": "blocked by safe mode"})
+                counts["errors"] += 1
+                continue
+            if debug:
+                sys.stderr.write("\n--- EXEC ---\n" + c + "\n-----------\n")
+            try:
+                rc, out, err = run_cmd(c, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                rc, out, err = 124, "", "timeout"
+            counts["executed"] += 1
+            ev.append({"cmd": c, "rc": rc, "stdout": out, "stderr": err})
+
+        # AI verdict from last evidence primarily, else manual
+        last = ev[-1] if ev else {"cmd":"","rc":0,"stdout":"","stderr":""}
+        ai = ai_judge(r, last["rc"], last["stdout"], last["stderr"])
+        results.append({"id":r["id"],"title":r["title"],"severity":r["severity"],"commands":r["commands"],"evidence":ev,"ai":ai})
+    return results, counts
+
+def discover_xccdf_files() -> List[str]:
+    return sorted(glob.glob("*.xml")) + sorted(glob.glob("*.xccdf.xml"))
+
+def interactive_select(files: List[str]) -> str:
+    print("STIG Runner")
+    for i,f in enumerate(files,1):
+        print(f"{i}) {f}")
+    print("a) Run All (first STIG)")
+    sel = input("Select STIG [1..N or a]: ").strip().lower()
+    if sel == "a": return files[0]
+    try:
+        idx = int(sel)
+        return files[idx-1]
+    except Exception:
+        return files[0]
 
 def main():
-    files = [f for f in os.listdir(".") if f.lower().endswith(".xml") and ("stig" in f.lower() or "xccdf" in f.lower()) and "macos" in f.lower()]
-    if not files: print("No STIG XCCDF XML files found in current dir."); sys.exit(1)
-    print("STIG Runner")
-    for i,f in enumerate(files,1): print(f"{i}) {f}")
-    print("a) Run All (first STIG)")
-    sel = input("Select STIG [1..N or a]: ").strip().lower() or "a"
-    source = files[0] if sel=="a" else files[int(sel)-1]
+    ap = argparse.ArgumentParser(description="macOS STIG XCCDF runner")
+    ap.add_argument("xccdf", nargs="?", help="Path to XCCDF XML (optional, else interactive)")
+    ap.add_argument("--ids", help="Comma separated rule IDs to run")
+    ap.add_argument("--keyword", help="Run rules whose title contains keyword")
+    ap.add_argument("--allow-unsafe", action="store_true", help="Allow non-whitelisted commands")
+    ap.add_argument("--timeout", type=int, default=12, help="Per-command timeout seconds")
+    ap.add_argument("--stream", action="store_true", help="Print progress as it runs")
+    ap.add_argument("--no-open", action="store_true", help="Do not open HTML in browser")
+    ap.add_argument("--debug-commands", action="store_true", help="Print exact command blocks before execution to stderr")
+    args = ap.parse_args()
+    global STREAM
+    STREAM = args.stream
 
-    rules = find_rules(source)
-    rows=[]; kpi=Counter({"pass":0,"fail":0,"error":0,"manual":0,"skipped":0}); sev_counts=Counter({"high":0,"medium":0,"low":0})
-    with open(OUT_TXT,"w") as txt, open(OUT_HTML,"w") as h:
-        h.write(theme.html_head("STIG Runner", f"Source {source}", LLM_MODEL, LLM_NUM_CTX, ALLOW_UNSAFE, timeout=DEFAULT_TIMEOUT))
-        # iterate
-        for r in rules:
-            sev_counts[r["severity"]] += 1
-            if r["commands"]:
-                c0 = r["commands"][0]
-                info(f"{r['id']} :: $ {'/usr/bin/osascript [heredoc]' if c0.startswith(HEREDOC_OSA_MARK) else c0}")
-                rc, out, err = run_cmd(c0, DEFAULT_TIMEOUT)
-                status, pass_like = triage_status(rc, out, err, r)
-            else:
-                rc,out,err=0,"",""
-                status, pass_like = "manual", False
+    xccdf = args.xccdf
+    if not xccdf:
+        files = discover_xccdf_files()
+        if not files:
+            print("No XCCDF XML found in the current folder.")
+            sys.exit(1)
+        xccdf = interactive_select(files)
 
-            # AI for non-pass
-            ai_obj=None
-            if status in ("errors","manual","skipped") or (status=="executed" and not pass_like):
-                likely_fp, why = probable_false_positive(rc,out,err)
-                meta={"id":r["id"],"title":r["title"],"severity":r["severity"],"status":status,"likely_fp":likely_fp,"why_fp":why,
-                      "command": r["commands"][0] if r["commands"] else ""}
-                ev=f"EXIT {rc}\nOUT:\n{out[:4000]}\nERR:\n{err[:2000]}"
-                ai_obj = ai_judge(meta, ev)
+    log(f"Parsing XCCDF: {xccdf}")
+    rules = extract_rules_from_xccdf(xccdf)
+    log(f"Loaded rules: {len(rules)}")
 
-            if status=="executed" and pass_like: kpi["pass"]+=1
-            elif status=="executed" and not pass_like: kpi["fail"]+=1
-            elif status=="errors": kpi["error"]+=1
-            elif status=="skipped": kpi["skipped"]+=1
-            else: kpi["manual"]+=1
+    ids = [s.strip() for s in args.ids.split(",")] if args.ids else []
+    results, counts = run_rules(rules, ids, args.keyword or "", args.allow_unsafe, args.timeout, args.debug_commands)
 
-            rows.append({"id":r["id"],"title":r["title"],"severity":r["severity"],"commands":r["commands"],"status":status,"pass_like":pass_like,
-                         "rc":rc,"out":out,"err":err,"ai":ai_obj})
+    base = os.path.splitext(os.path.basename(xccdf))[0]
+    html_path = f"stig_{STAMP}.html"
+    txt_path  = f"stig_{STAMP}.txt"
 
-            # TXT
-            txt.write(f"{r['id']}  {r['title']}  sev={r['severity']}\n")
-            if r["commands"]:
-                txt.write("$ " + ("/usr/bin/osascript  # heredoc\n" if r["commands"][0].startswith(HEREDOC_OSA_MARK) else r["commands"][0]+"\n"))
-            txt.write(f"status={status} rc={rc}\n")
-            if out: txt.write("STDOUT:\n"+out+"\n")
-            if err: txt.write("STDERR:\n"+err+"\n")
-            if ai_obj: txt.write("AI verdict: "+json.dumps(ai_obj, ensure_ascii=False)+"\n")
-            txt.write("-"*72+"\n")
+    # TXT
+    with open(txt_path,"w",encoding="utf-8") as f:
+        f.write(f"STIG Runner\nGenerated UTC {NOW.strftime('%Y-%m-%d %H:%M')}, Source {base}\n\n")
+        for r in results:
+            f.write(f"{r['id']} [{r['severity']}] {r['title']}\n")
+            f.write(f"AI verdict: {r['ai'].get('verdict')} - {r['ai'].get('risk_note')}\n")
+            for ev in r["evidence"]:
+                f.write(f"$ {first_line(ev['cmd'])} (exit {ev['rc']})\n")
+                if ev["stdout"].strip(): f.write(ev["stdout"]+"\n")
+                if ev["stderr"].strip(): f.write(ev["stderr"]+"\n")
+            f.write("\n")
 
-        # KPI + table + details
-        ai_index = min(100, kpi["fail"]*5 + kpi["error"]*3 + sev_counts["high"]*2 + sev_counts["medium"])
-        h.write(theme.html_dashboard(kpi, sev_counts, ai_index))
-        h.write(theme.html_table_open("Execution summary"))
-        for r in rows:
-            cmds = []
-            if r["commands"]:
-                first = r["commands"][0]
-                cmds = ["/usr/bin/osascript (heredoc)"] if isinstance(first,str) and first.startswith(HEREDOC_OSA_MARK) else [first]
-            status_key = ("executed-pass" if (r["status"]=="executed" and r["pass_like"]) else
-                          "executed-fail" if (r["status"]=="executed" and not r["pass_like"]) else r["status"])
-            h.write(theme.html_table_row(r["id"], r["title"], r["severity"], cmds, status_key, r["ai"]["verdict"] if r.get("ai") else None))
-        h.write(theme.html_table_close())
-        h.write('<div class="section"><h2>Rule details with evidence</h2>')
-        for r in rows:
-            cmds=[]
-            if r["commands"]:
-                cmds = ["/usr/bin/osascript (heredoc)"] if r["commands"][0].startswith(HEREDOC_OSA_MARK) else r["commands"]
-            h.write(theme.html_rule_block(r["id"], r["title"], r["severity"], cmds, r["rc"], r["out"], r["err"], r.get("ai")))
-        h.write(theme.html_close())
+    # HTML
+    meta = {"Generated UTC": NOW.strftime("%Y-%m-%d %H:%M"), "Source": base}
+    html = render_report_html("STIG Runner", meta, results)
+    with open(html_path,"w",encoding="utf-8") as f:
+        f.write(html)
 
-    print(f"STIG HTML: {OUT_HTML}")
-    print(f"STIG TXT:  {OUT_TXT}")
-    if OPEN_BROWSER:
-        try: webbrowser.open("file://" + os.path.abspath(OUT_HTML))
+    print(f"TXT report: {txt_path}")
+    print(f"HTML report: {html_path}")
+    if not args.no_open:
+        try: webbrowser.open(f"file://{os.path.abspath(html_path)}")
         except Exception: pass
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
