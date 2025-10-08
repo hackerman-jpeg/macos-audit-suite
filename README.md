@@ -20,6 +20,9 @@ This lightweight python script runs fully locally on macOS, no network calls, wi
 - `report_theme.py` a shared HTML theme, same look for both reports
 - **NOTE**, put any number of STIG files(XCCDF XML) file in the same folder as these scripts for the STIG run. It will parse the commands in the STIG and run them.
 
+![image](https://github.com/user-attachments/assets/dad6a11a-0af4-4aa4-8174-08104529b579)
+
+
 ---
 ### Features
 - Identical HTML for both tools, single theme and dashboard at the top
