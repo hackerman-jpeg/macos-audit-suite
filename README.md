@@ -1,13 +1,12 @@
+[![Build](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/python-lint-test.yml/badge.svg)](https://github.com/YOURORG/YOURREPO/actions/workflows/python-lint-test.yml)
+[![Release Bundle](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/release.yml/badge.svg)](https://github.com/YOURORG/YOURREPO/actions/workflows/release.yml)
+
 [![macOS 12 plus](https://img.shields.io/badge/macOS-12%2B-0b72ff?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
 [![Python 3.10 plus](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
-[![Offline LLM](https://img.shields.io/badge/Offline%20LLM-Local%20Only-1fd186?style=for-the-badge&logo=protocols-dot-io&logoColor=white)](#ai-behavior)
-[![No Telemetry](https://img.shields.io/badge/No%20Telemetry-True-00c853?style=for-the-badge)](#security-posture)
+
 [![STIG XCCDF](https://img.shields.io/badge/STIG-XCCDF-6c63ff?style=for-the-badge)](#stig-runner)
 [![NIST and CMMC](https://img.shields.io/badge/NIST%20800%2053%20%7C%20800%20171%20%7C%20CMMC-Support-ffb300?style=for-the-badge)](#compliance-posture)
-[![HTML Reports](https://img.shields.io/badge/Reports-HTML%20plus%20TXT-00acc1?style=for-the-badge&logo=google-chrome&logoColor=white)](#outputs)
-[![Safe by default](https://img.shields.io/badge/STIG%20Checks-Safe%20by%20Default-29b6f6?style=for-the-badge)](#security-posture)
 [![Llama 3.1](https://img.shields.io/badge/AI-Llama%203.1%208B-8e8dff?style=for-the-badge&logo=meta&logoColor=white)](#ai-behavior)
-[![Ollama](https://img.shields.io/badge/Ollama-Optional-4caf50?style=for-the-badge&logo=gnometerminal&logoColor=white)](#requirements)
 [![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Optimized-bd10e0?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
 
 # MacAudit²
