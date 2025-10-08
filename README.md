@@ -1,7 +1,5 @@
 [![Build](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/python-lint-test.yml/badge.svg)](https://github.com/YOURORG/YOURREPO/actions/workflows/python-lint-test.yml)
-[![Auto Tag & Release](https://github.com/hackerman-jpeg/mac-audit-suite/actions/workflows/auto-release.yml/badge.svg)](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/auto-release.yml)
-
-github/hackerman-jpeg/actions/workflows/auto-release.yml)
+[![Auto Tag & Release](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/auto-release.yml/badge.svg)](https://github.com/hackerman-jpeg/macos-audit-suite/actions/workflows/auto-release.yml)
 
 [![macOS 12 plus](https://img.shields.io/badge/macOS-12%2B-0b72ff?style=for-the-badge&logo=apple&logoColor=white)](#requirements)
 [![Python 3.10 plus](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](#requirements)
